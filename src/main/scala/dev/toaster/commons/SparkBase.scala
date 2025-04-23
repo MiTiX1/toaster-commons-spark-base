@@ -88,14 +88,41 @@ abstract class SparkBase[K, V]{
 
   private def awaitTermination(): Unit = spark.streams.awaitAnyTermination()
 
+  protected def beforeEach(batchId: Long): Unit = {}
+  protected def beforeAll(): Unit = {}
+  protected def afterEach(batchId: Long, success: Boolean): Unit = {}
+  protected def afterAll(): Unit = {}
+
   def consumeFromKafka(f: (Seq[Option[(K, V, Map[String, String])]], Long) => Unit): Unit = {
     if (!isConfigured) throw new RuntimeException("SparBase should be configured first")
-    subscribe.writeStream
-      .foreachBatch { (batchDf: DataFrame, batchId: Long ) =>
+    beforeAll()
+    val query = subscribe.writeStream.foreachBatch { (batchDf: DataFrame, batchId: Long ) =>
+      var success = true
+      beforeEach(batchId)
+      try {
         val messages = extractMessageFields(batchDf)
         f(messages, batchId)
+      } catch {
+        case e: Exception =>
+          success = false
+          println(s"[ERROR] Exception during batch $batchId: ${e.getMessage}")
+      } finally {
+        afterEach(batchId, success)
       }
-      .start()
+    }.start()
+
+    sys.addShutdownHook {
+      println("Stopping streaming query...")
+      try {
+        query.stop()
+        spark.stop()
+        afterAll()
+      } catch {
+        case e: Exception =>
+          println(s"Error during while shutting down: ${e.getMessage}")
+      }
+    }
+
     awaitTermination()
   }
 }
