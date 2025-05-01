@@ -1,6 +1,6 @@
 package dev.toaster.commons
 
-import dev.toaster.commons.DefaultConfig.{appName, bootstrapServers, includeHeaders, logLevel, master, schemaRegistryUrl, specificAvroReader, startingOffsets, subscribeTopic}
+import dev.toaster.commons.DefaultConfig.{appName, bootstrapServers, includeHeaders, logLevel, master, schemaRegistryUrl, specificAvroReader, startingOffsets}
 import org.apache.kafka.common.serialization.Deserializer
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
@@ -44,19 +44,19 @@ abstract class SparkBase[K, V]{
     isConfigured = true
   }
 
-  private def subscribe: DataFrame = spark
+  private def subscribe(topic: String): DataFrame = spark
     .readStream
     .format("kafka")
     .option("kafka.bootstrap.servers", bootstrapServers)
-    .option("subscribe", subscribeTopic)
+    .option("subscribe", topic)
     .option("startingOffsets", startingOffsets)
     .option("includeHeaders", includeHeaders)
     .load()
 
-  private def deserialize(keyBytes: Array[Byte], valueBytes: Array[Byte], headersRaw: Option[Seq[Row]]): Option[(K, V, Map[String, String])] = {
+  private def deserialize(topic: String, keyBytes: Array[Byte], valueBytes: Array[Byte], headersRaw: Option[Seq[Row]]): Option[(K, V, Map[String, String])] = {
     Try {
-      val key = innerKeyDeserializer.get.deserialize(subscribeTopic, keyBytes)
-      val value = innerValueDeserializer.get.deserialize(subscribeTopic, valueBytes)
+      val key = innerKeyDeserializer.get.deserialize(topic, keyBytes)
+      val value = innerValueDeserializer.get.deserialize(topic, valueBytes)
       val headers: Map[String, String] =
         headersRaw.getOrElse(Seq.empty).flatMap { h =>
           for {
@@ -77,25 +77,50 @@ abstract class SparkBase[K, V]{
     }
   }
 
-  private def extractMessageFields(df: DataFrame): Seq[Option[(K, V, Map[String, String])]] = {
+  private def extractMessageFields(topic: String, df: DataFrame): Seq[Option[(K, V, Map[String, String])]] = {
     df.collect().toSeq.map { row =>
       val keyBytes = row.getAs[Array[Byte]]("key")
       val valueBytes = row.getAs[Array[Byte]]("value")
       val headersRaw = Option(row.getAs[Seq[Row]]("headers"))
-      deserialize(keyBytes, valueBytes, headersRaw)
+      deserialize(topic, keyBytes, valueBytes, headersRaw)
     }
   }
 
-  private def awaitTermination(): Unit = spark.streams.awaitAnyTermination()
+  def awaitTermination(): Unit = spark.streams.awaitAnyTermination()
 
-  def consumeFromKafka(f: (Seq[Option[(K, V, Map[String, String])]], Long) => Unit): Unit = {
+  protected def beforeEach(batchId: Long): Unit = {}
+  protected def beforeAll(): Unit = {}
+  protected def afterEach(batchId: Long, success: Boolean): Unit = {}
+  protected def afterAll(): Unit = {}
+
+  def consumeFromKafka(topic: String, f: (Seq[Option[(K, V, Map[String, String])]], Long) => Unit): Unit = {
     if (!isConfigured) throw new RuntimeException("SparBase should be configured first")
-    subscribe.writeStream
-      .foreachBatch { (batchDf: DataFrame, batchId: Long ) =>
-        val messages = extractMessageFields(batchDf)
+    beforeAll()
+    val query = subscribe(topic).writeStream.foreachBatch { (batchDf: DataFrame, batchId: Long ) =>
+      var success = true
+      beforeEach(batchId)
+      try {
+        val messages = extractMessageFields(topic, batchDf)
         f(messages, batchId)
+      } catch {
+        case e: Exception =>
+          success = false
+          println(s"[ERROR] Exception during batch $batchId: ${e.getMessage}")
+      } finally {
+        afterEach(batchId, success)
       }
-      .start()
-    awaitTermination()
+    }.start()
+
+    sys.addShutdownHook {
+      println("Stopping streaming query...")
+      try {
+        query.stop()
+        spark.stop()
+        afterAll()
+      } catch {
+        case e: Exception =>
+          println(s"Error during while shutting down: ${e.getMessage}")
+      }
+    }
   }
 }
