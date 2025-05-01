@@ -12,28 +12,38 @@ A `Scala` library that provides a unified base for Spark applications using Kafk
 ## How to Use
 
 ````scala
-object App extends SparkBase[Key, Person] {
+object SparkApp extends SparkBase[Key, Value] {
   val keyDeserializer: KafkaAvroDeserializer[Key] =
     new KafkaAvroDeserializer[Key]
-  val valueDeserializer: KafkaAvroDeserializer[Person] =
-    new KafkaAvroDeserializer[Person]
+  val valueDeserializer: KafkaAvroDeserializer[Value] =
+    new KafkaAvroDeserializer[Value]
   implicit val keySerializer: KafkaAvroSerializer[Key] =
     new KafkaAvroSerializer[Key]
-  implicit val valueSerializer: KafkaAvroSerializer[Person] =
-    new KafkaAvroSerializer[Person]
-  val kafkaProducerClient = new KafkaProducerClient[Key, Person]()
+  implicit val valueSerializer: KafkaAvroSerializer[Value] =
+    new KafkaAvroSerializer[Value]
+  val kafkaProducerClient = new KafkaProducerClient[Key, Value]()
 
   def main(args: Array[String]): Unit = {
     configure(keyDeserializer, valueDeserializer)
-    consumeFromKafka { case (messages, batchId) =>
+    
+    consumeFromKafka("input", (messages, batchId) => {
       messages.foreach {
         case Some((key, value, headers)) =>
           println(s"key: $key, value: $value, headers: $headers")
           kafkaProducerClient.send("output", key, value, headers)
-        case None =>
-          println(s"Error reading values in batch: $batchId")
+        case None => println(s"Error reading values in batch: $batchId")
       }
-    }
+    })
+
+    consumeFromKafka("output", (messages, batchId) => {
+      messages.foreach {
+        case Some((key, value, headers)) =>
+          println(s"key: $key, value: $value, headers: $headers")
+        case None => println(s"Error reading values in batch: $batchId")
+      }
+    })
+
+    awaitTermination()
   }
 }
 ````
