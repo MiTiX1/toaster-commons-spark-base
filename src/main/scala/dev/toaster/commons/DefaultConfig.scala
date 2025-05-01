@@ -12,7 +12,6 @@ object DefaultConfig {
   lazy val master = sparkConfig.getString("master")
   lazy val logLevel = sparkConfig.getString("log-level")
   lazy val startingOffsets = sparkConfig.getString("startingOffsets")
-  lazy val subscribeTopic = sparkConfig.getString("subscribeTopic")
   lazy val includeHeaders = sparkConfig.getString("includeHeaders")
 
   lazy val kafkaConfig = config.getConfig("kafka")
