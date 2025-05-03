@@ -7,12 +7,7 @@ import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import scala.jdk.CollectionConverters.mapAsJavaMapConverter
 import scala.util.{Failure, Success, Try}
 
-abstract class SparkBase[K, V]{
-
-  private var isConfigured = false
-  private var innerKeyDeserializer: Option[Deserializer[K]] = None
-  private var innerValueDeserializer: Option[Deserializer[V]] = None
-
+abstract class SparkBase {
   private lazy val spark: SparkSession = {
     val session = SparkSession
       .builder
@@ -28,20 +23,9 @@ abstract class SparkBase[K, V]{
     "specific.avro.reader" -> specificAvroReader,
   ).asJava
 
-  def configure(keyDeserializer: Deserializer[K], valueDeserializer: Deserializer[V]): Unit = {
-    innerKeyDeserializer = Some(keyDeserializer)
-    innerValueDeserializer = Some(valueDeserializer)
-    innerKeyDeserializer match {
-      case Some(k: Deserializer[K]) => k.configure(configMap, true)
-      case Some(k) => throw new RuntimeException("Key deserializer could not be initialised")
-      case None => throw new RuntimeException("Key deserializer should be defined")
-    }
-    innerValueDeserializer match {
-      case Some(v: Deserializer[V]) => v.configure(configMap, false)
-      case Some(v) => throw new RuntimeException("Value deserializer could not be initialised")
-      case _ => throw new RuntimeException("Value deserializer should be defined")
-    }
-    isConfigured = true
+  private def configureDeserializers[K, V](keyDeserializer: Deserializer[K], valueDeserializer: Deserializer[V]): Unit = {
+    keyDeserializer.configure(configMap, true)
+    valueDeserializer.configure(configMap, false)
   }
 
   private def subscribe(topic: String): DataFrame = spark
@@ -53,10 +37,17 @@ abstract class SparkBase[K, V]{
     .option("includeHeaders", includeHeaders)
     .load()
 
-  private def deserialize(topic: String, keyBytes: Array[Byte], valueBytes: Array[Byte], headersRaw: Option[Seq[Row]]): Option[(K, V, Map[String, String])] = {
+  private def deserialize[K, V](
+    topic: String,
+    keyBytes: Array[Byte],
+    valueBytes: Array[Byte],
+    headersRaw: Option[Seq[Row]],
+    keyDeserializer: Deserializer[K],
+    valueDeserializer: Deserializer[V]
+  ): Option[(K, V, Map[String, String])] = {
     Try {
-      val key = innerKeyDeserializer.get.deserialize(topic, keyBytes)
-      val value = innerValueDeserializer.get.deserialize(topic, valueBytes)
+      val key = keyDeserializer.deserialize(topic, keyBytes)
+      val value = valueDeserializer.deserialize(topic, valueBytes)
       val headers: Map[String, String] =
         headersRaw.getOrElse(Seq.empty).flatMap { h =>
           for {
@@ -77,12 +68,17 @@ abstract class SparkBase[K, V]{
     }
   }
 
-  private def extractMessageFields(topic: String, df: DataFrame): Seq[Option[(K, V, Map[String, String])]] = {
+  private def extractMessageFields[K, V](
+    topic: String,
+    df: DataFrame,
+    keyDeserializer: Deserializer[K],
+    valueDeserializer: Deserializer[V]
+  ): Seq[Option[(K, V, Map[String, String])]] = {
     df.collect().toSeq.map { row =>
       val keyBytes = row.getAs[Array[Byte]]("key")
       val valueBytes = row.getAs[Array[Byte]]("value")
       val headersRaw = Option(row.getAs[Seq[Row]]("headers"))
-      deserialize(topic, keyBytes, valueBytes, headersRaw)
+      deserialize(topic, keyBytes, valueBytes, headersRaw, keyDeserializer, valueDeserializer)
     }
   }
 
@@ -93,14 +89,18 @@ abstract class SparkBase[K, V]{
   protected def afterEach(batchId: Long, success: Boolean): Unit = {}
   protected def afterAll(): Unit = {}
 
-  def consumeFromKafka(topic: String, f: (Seq[Option[(K, V, Map[String, String])]], Long) => Unit): Unit = {
-    if (!isConfigured) throw new RuntimeException("SparBase should be configured first")
+  def consumeFromKafka[K, V](
+    topic: String,
+    keyDeserializer: Deserializer[K],
+    valueDeserializer: Deserializer[V],
+    f: (Seq[Option[(K, V, Map[String, String])]], Long) => Unit): Unit = {
+    configureDeserializers(keyDeserializer, valueDeserializer)
     beforeAll()
     val query = subscribe(topic).writeStream.foreachBatch { (batchDf: DataFrame, batchId: Long ) =>
       var success = true
       beforeEach(batchId)
       try {
-        val messages = extractMessageFields(topic, batchDf)
+        val messages = extractMessageFields(topic, batchDf, keyDeserializer, valueDeserializer)
         f(messages, batchId)
       } catch {
         case e: Exception =>
