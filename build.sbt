@@ -8,6 +8,7 @@ ThisBuild / scalaVersion := "2.12.18"
 val sparkVersion = "3.5.2"
 
 enablePlugins(SbtAvrohugger)
+enablePlugins(ProtocPlugin)
 
 
 lazy val root = (project in file("."))
@@ -22,8 +23,14 @@ lazy val root = (project in file("."))
       "io.confluent" % "kafka-avro-serializer" % "7.9.0",
       "org.apache.avro" % "avro" % "1.12.0" % "provided",
       "com.typesafe" % "config" % "1.4.3",
+      "com.google.protobuf" % "protobuf-java" % "3.22.3",
+      "com.google.protobuf" % "protobuf-java-util" % "3.22.3",
+      "com.thesamet.scalapb" %% "scalapb-runtime" % "0.11.17" % "protobuf"
     ),
     Compile / sourceGenerators += (Compile / avroScalaGenerateSpecific).taskValue,
+    Compile / PB.targets := Seq(
+      scalapb.gen() -> (Compile / sourceManaged).value / "scalapb"
+    ),
     target in assembly := file("jars")
   )
 
