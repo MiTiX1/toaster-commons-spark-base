@@ -6,7 +6,7 @@ A `Scala` library that provides a unified base for Spark applications using Kafk
 
 - `SparkBase`: A configurable and extendable base class for Apache Spark applications.
 - `KafkaProducerClient`: A simple Kafka producer client wrapper to streamline Kafka message publishing.
-- _Avro_ deserialization support with integration with Schema Registry.
+- _Avro_ / _Proto_ deserialization support with integration with Schema Registry.
 - Shared config patterns and utility methods (optional – add more as you expand!).
 
 ## How to Use
