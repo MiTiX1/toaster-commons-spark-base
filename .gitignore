@@ -50,7 +50,9 @@ build/
 
 ### Tests ###
 Main.scala
+SparkApp.scala
 *.avsc
 avro/
+protobuf/
 jars/
 spark-checkpoints/
