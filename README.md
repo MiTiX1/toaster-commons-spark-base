@@ -50,5 +50,4 @@ object SparkApp extends SparkBase[Key, Value] {
 
 ## ⏱️ Features to Come
 
-- More deserialization protocols support.
 - Enhanced error logging and metrics integration.
